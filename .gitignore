@@ -7,3 +7,10 @@ venv/
 env/
 .idea/
 .vscode/
+
+# Build and Temp folders
+front/dist/
+.history/
+*.log
+*.zip
+*.bak

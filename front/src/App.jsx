@@ -7,9 +7,7 @@ import Signup    from './Signup'
 import Analytics from './Analytics'
 import Profile   from './Profile'
 
-const API_URL = window.location.origin.includes('localhost')
-  ? 'http://localhost:8000'
-  : window.location.origin
+const API_URL = '/api'
 
 const DEFAULTS = {
   Warehouse_block: 'D', Mode_of_Shipment: 'Ship', Customer_care_calls: 4,
