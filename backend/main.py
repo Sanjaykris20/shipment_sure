@@ -371,19 +371,26 @@ if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
 
-# ── Serve React frontend (MUST be last, after all API routes) ─────────
+# ── Serve React frontend (ONLY if built assets exist locally) ─────────
 FRONT_DIST = os.path.join(BASE_DIR, "front", "dist")
-if os.path.isdir(FRONT_DIST):
-    app.mount("/assets", StaticFiles(directory=os.path.join(FRONT_DIST, "assets")), name="assets")
-
-    @app.get("/{full_path:path}")
-    def serve_spa(full_path: str):
-        """Serve React app for all non-API routes (SPA fallback)."""
-        # Do not shadow API routes
-        if full_path.startswith("api/"):
-            raise HTTPException(status_code=404, detail="API route not found")
-            
-        file_path = os.path.join(FRONT_DIST, full_path)
-        if os.path.isfile(file_path):
-            return FileResponse(file_path)
-        return FileResponse(os.path.join(FRONT_DIST, "index.html"))
+if os.path.isdir(FRONT_DIST) and os.path.isdir(os.path.join(FRONT_DIST, "assets")):
+    try:
+        app.mount("/assets", StaticFiles(directory=os.path.join(FRONT_DIST, "assets")), name="assets")
+        
+        @app.get("/{full_path:path}")
+        def serve_spa(full_path: str):
+            """Serve React app for all non-API routes (SPA fallback)."""
+            # Do not shadow API routes
+            if full_path.startswith("api/"):
+                raise HTTPException(status_code=404, detail="API route not found")
+                
+            file_path = os.path.join(FRONT_DIST, full_path)
+            if os.path.isfile(file_path):
+                return FileResponse(file_path)
+            # Only return index.html if it exists
+            index_path = os.path.join(FRONT_DIST, "index.html")
+            if os.path.isfile(index_path):
+                return FileResponse(index_path)
+            raise HTTPException(status_code=404, detail="Static assets missing")
+    except Exception as e:
+        print(f"[WARNING] Could not mount static files: {e}")
