@@ -33,10 +33,10 @@ app.add_middleware(
 )
 
 # ── Paths & Config ───────────────────────────────────────────────────
-BASE_DIR          = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+BASE_DIR          = os.path.dirname(os.path.abspath(__file__))
 MODEL_PATH        = os.path.join(BASE_DIR, "models", "best_model.pkl")
 PREPROCESSOR_PATH = os.path.join(BASE_DIR, "models", "preprocessor.pkl")
-DB_PATH           = os.path.join(BASE_DIR, "backend", "users.db")
+DB_PATH           = os.path.join(BASE_DIR, "users.db")
 
 # Use DATABASE_URL for Vercel/Production, fallback to local sqlite
 DATABASE_URL = os.getenv("DATABASE_URL")
