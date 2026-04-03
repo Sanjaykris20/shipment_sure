@@ -45,6 +45,7 @@ IS_POSTGRES  = DATABASE_URL and DATABASE_URL.startswith("postgres")
 # ── Globals ─────────────────────────────────────────────────────────────
 model        = None
 preprocessor = None
+last_error   = None
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -52,61 +53,69 @@ preprocessor = None
 # ══════════════════════════════════════════════════════════════════════
 
 def get_db():
-    if IS_POSTGRES:
-        import psycopg2
-        from psycopg2.extras import RealDictCursor
-        conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
-        return conn
-    else:
-        conn = sqlite3.connect(DB_PATH)
-        conn.row_factory = sqlite3.Row
-        return conn
+    try:
+        if IS_POSTGRES:
+            import psycopg2
+            from psycopg2.extras import RealDictCursor
+            conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+            return conn
+        else:
+            conn = sqlite3.connect(DB_PATH)
+            conn.row_factory = sqlite3.Row
+            return conn
+    except Exception as e:
+        print(f"[ERROR] get_db: {e}")
+        raise e
 
 def init_db():
-    conn = get_db()
-    c = conn.cursor()
-    
-    # SQLite vs Postgres syntax handled via base SQL
-    users_sql = """
-        CREATE TABLE IF NOT EXISTS users (
-            id           SERIAL PRIMARY KEY,
-            name         TEXT    NOT NULL,
-            email        TEXT    UNIQUE NOT NULL,
-            password_hash TEXT   NOT NULL,
-            created_at   TEXT    NOT NULL
-        )
-    """
-    sessions_sql = """
-        CREATE TABLE IF NOT EXISTS sessions (
-            token      TEXT PRIMARY KEY,
-            user_id    INTEGER NOT NULL,
-            email      TEXT    NOT NULL,
-            name       TEXT    NOT NULL,
-            created_at TEXT    NOT NULL
-        )
-    """
-    history_sql = """
-        CREATE TABLE IF NOT EXISTS prediction_history (
-            id          SERIAL PRIMARY KEY,
-            user_id     INTEGER NOT NULL,
-            inputs      TEXT    NOT NULL,
-            status      TEXT    NOT NULL,
-            confidence  REAL    NOT NULL,
-            created_at  TEXT    NOT NULL
-        )
-    """
-    
-    # Simple fix for SQLite which doesn't know SERIAL
-    if not IS_POSTGRES:
-        users_sql = users_sql.replace("SERIAL", "INTEGER")
-        history_sql = history_sql.replace("SERIAL", "INTEGER")
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        
+        # SQLite vs Postgres syntax handled via base SQL
+        users_sql = """
+            CREATE TABLE IF NOT EXISTS users (
+                id           SERIAL PRIMARY KEY,
+                name         TEXT    NOT NULL,
+                email        TEXT    UNIQUE NOT NULL,
+                password_hash TEXT   NOT NULL,
+                created_at   TEXT    NOT NULL
+            )
+        """
+        sessions_sql = """
+            CREATE TABLE IF NOT EXISTS sessions (
+                token      TEXT PRIMARY KEY,
+                user_id    INTEGER NOT NULL,
+                email      TEXT    NOT NULL,
+                name       TEXT    NOT NULL,
+                created_at TEXT    NOT NULL
+            )
+        """
+        history_sql = """
+            CREATE TABLE IF NOT EXISTS prediction_history (
+                id          SERIAL PRIMARY KEY,
+                user_id     INTEGER NOT NULL,
+                inputs      TEXT    NOT NULL,
+                status      TEXT    NOT NULL,
+                confidence  REAL    NOT NULL,
+                created_at  TEXT    NOT NULL
+            )
+        """
+        
+        # Simple fix for SQLite which doesn't know SERIAL
+        if not IS_POSTGRES:
+            users_sql = users_sql.replace("SERIAL", "INTEGER")
+            history_sql = history_sql.replace("SERIAL", "INTEGER")
 
-    c.execute(users_sql)
-    c.execute(sessions_sql)
-    c.execute(history_sql)
-    conn.commit()
-    conn.close()
-    print(f"[OK] Database initialised ({'Postgres' if IS_POSTGRES else 'SQLite'}).")
+        c.execute(users_sql)
+        c.execute(sessions_sql)
+        c.execute(history_sql)
+        conn.commit()
+        conn.close()
+        print(f"[OK] Database initialised ({'Postgres' if IS_POSTGRES else 'SQLite'}).")
+    except Exception as e:
+        print(f"[ERROR] init_db: {e}")
+        raise e
 
 def hash_password(password: str) -> str:
     return hashlib.sha256(password.encode()).hexdigest()
@@ -128,15 +137,25 @@ def get_user_from_token(token: str):
 
 @app.on_event("startup")
 async def startup():
-    global model, preprocessor
-    init_db()
+    global model, preprocessor, last_error
     try:
+        init_db()
+    except Exception as e:
+        last_error = f"Database Error: {e}"
+        print(f"[ERROR] Startup Database: {e}")
+    
+    try:
+        print(f"[DEBUG] Loading models from: {MODEL_PATH}")
+        if not os.path.exists(MODEL_PATH):
+            raise FileNotFoundError(f"Model file not found at {MODEL_PATH}")
+            
         with open(MODEL_PATH, "rb") as f:
             model = pickle.load(f)
         with open(PREPROCESSOR_PATH, "rb") as f:
             preprocessor = pickle.load(f)
         print("[OK] ML model and preprocessor loaded.")
     except Exception as e:
+        last_error = f"Artifact Error: {e}"
         print(f"[ERROR] Loading artifacts: {e}")
 
 
@@ -262,8 +281,8 @@ def status():
     if model and preprocessor:
         return {"status": "ready", "model": "loaded", "preprocessor": "loaded"}
     
-    error_msg = f"Artifacts not loaded. Path: {MODEL_PATH}"
-    return {"status": "error", "message": error_msg}
+    error_msg = f"Artifacts not loaded. {last_error or 'Unknown error.'}"
+    return {"status": "error", "message": error_msg, "path": MODEL_PATH}
 
 
 # ══════════════════════════════════════════════════════════════════════
