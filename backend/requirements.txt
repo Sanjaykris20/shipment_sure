@@ -1,8 +1,11 @@
 fastapi
+uvicorn[standard]
 pandas
 numpy
 scikit-learn
+xgboost
 pydantic
 python-multipart
 python-dotenv
 psycopg2-binary
+gunicorn
