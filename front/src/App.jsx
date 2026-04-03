@@ -85,10 +85,13 @@ function Dashboard() {
   // API health check
   useEffect(() => {
     const check = async () => {
-      try { const r = await axios.get(`${API_URL}/status`, { timeout: 2000 }); setApiReady(r.data.status === 'ready') }
+      try { 
+        const r = await axios.get(`${API_URL}/status`, { timeout: 30000 }); 
+        setApiReady(r.data.status === 'ready') 
+      }
       catch { setApiReady(false) }
     }
-    check(); const t = setInterval(check, 5000); return () => clearInterval(t)
+    check(); const t = setInterval(check, 10000); return () => clearInterval(t)
   }, [])
 
   // Auto-load history on mount
