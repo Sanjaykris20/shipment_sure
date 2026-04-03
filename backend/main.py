@@ -261,7 +261,9 @@ def root():
 def status():
     if model and preprocessor:
         return {"status": "ready", "model": "loaded", "preprocessor": "loaded"}
-    return {"status": "error", "message": "Artifacts not loaded."}
+    
+    error_msg = f"Artifacts not loaded. Path: {MODEL_PATH}"
+    return {"status": "error", "message": error_msg}
 
 
 # ══════════════════════════════════════════════════════════════════════
