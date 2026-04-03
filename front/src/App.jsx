@@ -7,7 +7,7 @@ import Signup    from './Signup'
 import Analytics from './Analytics'
 import Profile   from './Profile'
 
-const API_URL = '/api'
+const API_URL = import.meta.env.VITE_API_URL || '/api'
 
 const DEFAULTS = {
   Warehouse_block: 'D', Mode_of_Shipment: 'Ship', Customer_care_calls: 4,
@@ -91,10 +91,25 @@ function Dashboard() {
     check(); const t = setInterval(check, 5000); return () => clearInterval(t)
   }, [])
 
-  // Load history
+  // Auto-load history on mount
+  useEffect(() => {
+    if (user) loadHistory()
+  }, [user])
+
+  // Load history and optionally pre-populate
   const loadHistory = async () => {
-    try { const r = await axios.get(`${API_URL}/history`); setHistory(r.data) }
-    catch {}
+    try {
+      const r = await axios.get(`${API_URL}/history`)
+      const data = r.data
+      setHistory(data)
+      
+      // Regain stored info: If user has history, use latest prediction as form base
+      if (data && data.length > 0) {
+        setForm(prev => ({ ...prev, ...data[0].inputs }))
+      }
+    } catch (err) {
+      console.error("Failed to load history:", err)
+    }
   }
 
   const update = k => v => setForm(p => ({ ...p, [k]: v }))

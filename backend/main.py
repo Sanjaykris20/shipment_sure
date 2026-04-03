@@ -10,7 +10,12 @@ import os
 import sqlite3
 import hashlib
 import uuid
+import json
 from datetime import datetime
+from dotenv import load_dotenv
+
+# Load .env file for local development
+load_dotenv()
 
 app = FastAPI(
     title="ShipmentSure API",
@@ -27,11 +32,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ── Paths ──────────────────────────────────────────────────────────────
+# ── Paths & Config ───────────────────────────────────────────────────
 BASE_DIR          = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MODEL_PATH        = os.path.join(BASE_DIR, "models", "best_model.pkl")
 PREPROCESSOR_PATH = os.path.join(BASE_DIR, "models", "preprocessor.pkl")
 DB_PATH           = os.path.join(BASE_DIR, "backend", "users.db")
+
+# Use DATABASE_URL for Vercel/Production, fallback to local sqlite
+DATABASE_URL = os.getenv("DATABASE_URL")
+IS_POSTGRES  = DATABASE_URL and DATABASE_URL.startswith("postgres")
 
 # ── Globals ─────────────────────────────────────────────────────────────
 model        = None
@@ -43,55 +52,72 @@ preprocessor = None
 # ══════════════════════════════════════════════════════════════════════
 
 def get_db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+    if IS_POSTGRES:
+        import psycopg2
+        from psycopg2.extras import RealDictCursor
+        conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+        return conn
+    else:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        return conn
 
 def init_db():
     conn = get_db()
     c = conn.cursor()
-    c.execute("""
+    
+    # SQLite vs Postgres syntax handled via base SQL
+    users_sql = """
         CREATE TABLE IF NOT EXISTS users (
-            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            id           SERIAL PRIMARY KEY,
             name         TEXT    NOT NULL,
             email        TEXT    UNIQUE NOT NULL,
             password_hash TEXT   NOT NULL,
             created_at   TEXT    NOT NULL
         )
-    """)
-    c.execute("""
+    """
+    sessions_sql = """
         CREATE TABLE IF NOT EXISTS sessions (
             token      TEXT PRIMARY KEY,
             user_id    INTEGER NOT NULL,
             email      TEXT    NOT NULL,
             name       TEXT    NOT NULL,
-            created_at TEXT    NOT NULL,
-            FOREIGN KEY (user_id) REFERENCES users(id)
+            created_at TEXT    NOT NULL
         )
-    """)
-    c.execute("""
+    """
+    history_sql = """
         CREATE TABLE IF NOT EXISTS prediction_history (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            id          SERIAL PRIMARY KEY,
             user_id     INTEGER NOT NULL,
             inputs      TEXT    NOT NULL,
             status      TEXT    NOT NULL,
             confidence  REAL    NOT NULL,
-            created_at  TEXT    NOT NULL,
-            FOREIGN KEY (user_id) REFERENCES users(id)
+            created_at  TEXT    NOT NULL
         )
-    """)
+    """
+    
+    # Simple fix for SQLite which doesn't know SERIAL
+    if not IS_POSTGRES:
+        users_sql = users_sql.replace("SERIAL", "INTEGER")
+        history_sql = history_sql.replace("SERIAL", "INTEGER")
+
+    c.execute(users_sql)
+    c.execute(sessions_sql)
+    c.execute(history_sql)
     conn.commit()
     conn.close()
-    print("[OK] Database initialised.")
+    print(f"[OK] Database initialised ({'Postgres' if IS_POSTGRES else 'SQLite'}).")
 
 def hash_password(password: str) -> str:
     return hashlib.sha256(password.encode()).hexdigest()
 
 def get_user_from_token(token: str):
     conn = get_db()
-    row  = conn.execute(
-        "SELECT * FROM sessions WHERE token = ?", (token,)
-    ).fetchone()
+    c = conn.cursor()
+    
+    query = "SELECT * FROM sessions WHERE token = %s" if IS_POSTGRES else "SELECT * FROM sessions WHERE token = ?"
+    c.execute(query, (token,))
+    row = c.fetchone()
     conn.close()
     return dict(row) if row else None
 
@@ -132,7 +158,7 @@ class LoginInput(BaseModel):
 #  AUTH ROUTES
 # ══════════════════════════════════════════════════════════════════════
 
-@app.post("/auth/register", tags=["Auth"])
+@app.post("/api/auth/register", tags=["Auth"])
 def register(data: RegisterInput):
     if len(data.name.strip()) < 2:
         raise HTTPException(400, "Name must be at least 2 characters.")
@@ -142,42 +168,57 @@ def register(data: RegisterInput):
         raise HTTPException(400, "Password must be at least 6 characters.")
 
     conn = get_db()
-    existing = conn.execute(
-        "SELECT id FROM users WHERE email = ?", (data.email.lower(),)
-    ).fetchone()
+    c = conn.cursor()
+    
+    query = "SELECT id FROM users WHERE email = %s" if IS_POSTGRES else "SELECT id FROM users WHERE email = ?"
+    c.execute(query, (data.email.lower(),))
+    existing = c.fetchone()
 
     if existing:
         conn.close()
         raise HTTPException(409, "Email already registered. Please log in.")
 
-    conn.execute(
-        "INSERT INTO users (name, email, password_hash, created_at) VALUES (?,?,?,?)",
-        (data.name.strip(), data.email.lower(),
-         hash_password(data.password), datetime.utcnow().isoformat())
-    )
+    insert_query = """
+        INSERT INTO users (name, email, password_hash, created_at) 
+        VALUES (%s, %s, %s, %s)
+    """ if IS_POSTGRES else """
+        INSERT INTO users (name, email, password_hash, created_at) 
+        VALUES (?, ?, ?, ?)
+    """
+    c.execute(insert_query, (data.name.strip(), data.email.lower(),
+         hash_password(data.password), datetime.utcnow().isoformat()))
     conn.commit()
     conn.close()
     return {"message": "Account created successfully. Please log in."}
 
 
-@app.post("/auth/login", tags=["Auth"])
+@app.post("/api/auth/login", tags=["Auth"])
 def login(data: LoginInput):
-    conn  = get_db()
-    user  = conn.execute(
-        "SELECT * FROM users WHERE email = ? AND password_hash = ?",
-        (data.email.lower(), hash_password(data.password))
-    ).fetchone()
+    conn = get_db()
+    c = conn.cursor()
+    
+    query = """
+        SELECT * FROM users WHERE email = %s AND password_hash = %s
+    """ if IS_POSTGRES else """
+        SELECT * FROM users WHERE email = ? AND password_hash = ?
+    """
+    c.execute(query, (data.email.lower(), hash_password(data.password)))
+    user = c.fetchone()
 
     if not user:
         conn.close()
         raise HTTPException(401, "Invalid email or password.")
 
     token = str(uuid.uuid4())
-    conn.execute(
-        "INSERT INTO sessions (token, user_id, email, name, created_at) VALUES (?,?,?,?,?)",
-        (token, user["id"], user["email"], user["name"],
-         datetime.utcnow().isoformat())
-    )
+    insert_session_query = """
+        INSERT INTO sessions (token, user_id, email, name, created_at) 
+        VALUES (%s, %s, %s, %s, %s)
+    """ if IS_POSTGRES else """
+        INSERT INTO sessions (token, user_id, email, name, created_at) 
+        VALUES (?, ?, ?, ?, ?)
+    """
+    c.execute(insert_session_query, (token, user["id"], user["email"], user["name"],
+         datetime.utcnow().isoformat()))
     conn.commit()
     conn.close()
 
@@ -187,7 +228,7 @@ def login(data: LoginInput):
     }
 
 
-@app.get("/auth/me", tags=["Auth"])
+@app.get("/api/auth/me", tags=["Auth"])
 def me(authorization: str = Header(...)):
     token = authorization.replace("Bearer ", "")
     session = get_user_from_token(token)
@@ -196,11 +237,13 @@ def me(authorization: str = Header(...)):
     return {"name": session["name"], "email": session["email"]}
 
 
-@app.post("/auth/logout", tags=["Auth"])
+@app.post("/api/auth/logout", tags=["Auth"])
 def logout(authorization: str = Header(...)):
     token = authorization.replace("Bearer ", "")
-    conn  = get_db()
-    conn.execute("DELETE FROM sessions WHERE token = ?", (token,))
+    conn = get_db()
+    c = conn.cursor()
+    query = "DELETE FROM sessions WHERE token = %s" if IS_POSTGRES else "DELETE FROM sessions WHERE token = ?"
+    c.execute(query, (token,))
     conn.commit()
     conn.close()
     return {"message": "Logged out."}
@@ -214,7 +257,7 @@ def logout(authorization: str = Header(...)):
 def root():
     return {"message": "Welcome to ShipmentSure API v2", "docs": "/docs"}
 
-@app.get("/status")
+@app.get("/api/status")
 def status():
     if model and preprocessor:
         return {"status": "ready", "model": "loaded", "preprocessor": "loaded"}
@@ -238,7 +281,7 @@ class ShipmentInput(BaseModel):
     Weight_in_gms:        float
 
 
-@app.post("/predict", tags=["Prediction"])
+@app.post("/api/predict", tags=["Prediction"])
 def predict(shipment: ShipmentInput, authorization: str = Header(...)):
     # Verify token
     token   = authorization.replace("Bearer ", "")
@@ -270,13 +313,17 @@ def predict(shipment: ShipmentInput, authorization: str = Header(...)):
         label       = "On Time" if prediction == 1 else "Delayed"
 
         # Save to history
-        import json
         conn = get_db()
-        conn.execute(
-            "INSERT INTO prediction_history (user_id, inputs, status, confidence, created_at) VALUES (?,?,?,?,?)",
-            (session["user_id"], json.dumps(shipment.dict()), label,
-             round(confidence, 4), datetime.utcnow().isoformat())
-        )
+        c = conn.cursor()
+        query = """
+            INSERT INTO prediction_history (user_id, inputs, status, confidence, created_at) 
+            VALUES (%s, %s, %s, %s, %s)
+        """ if IS_POSTGRES else """
+            INSERT INTO prediction_history (user_id, inputs, status, confidence, created_at) 
+            VALUES (?, ?, ?, ?, ?)
+        """
+        c.execute(query, (session["user_id"], json.dumps(shipment.dict()), label,
+              round(confidence, 4), datetime.utcnow().isoformat()))
         conn.commit()
         conn.close()
 
@@ -290,19 +337,22 @@ def predict(shipment: ShipmentInput, authorization: str = Header(...)):
         raise HTTPException(400, f"Prediction error: {str(e)}")
 
 
-@app.get("/history", tags=["Prediction"])
+@app.get("/api/history", tags=["Prediction"])
 def history(authorization: str = Header(...)):
     token   = authorization.replace("Bearer ", "")
     session = get_user_from_token(token)
     if not session:
         raise HTTPException(401, "Authentication required.")
 
-    import json
     conn = get_db()
-    rows = conn.execute(
-        "SELECT * FROM prediction_history WHERE user_id=? ORDER BY id DESC LIMIT 10",
-        (session["user_id"],)
-    ).fetchall()
+    c = conn.cursor()
+    query = """
+        SELECT * FROM prediction_history WHERE user_id=%s ORDER BY id DESC LIMIT 10
+    """ if IS_POSTGRES else """
+        SELECT * FROM prediction_history WHERE user_id=? ORDER BY id DESC LIMIT 10
+    """
+    c.execute(query, (session["user_id"],))
+    rows = c.fetchall()
     conn.close()
 
     return [
@@ -329,6 +379,10 @@ if os.path.isdir(FRONT_DIST):
     @app.get("/{full_path:path}")
     def serve_spa(full_path: str):
         """Serve React app for all non-API routes (SPA fallback)."""
+        # Do not shadow API routes
+        if full_path.startswith("api/"):
+            raise HTTPException(status_code=404, detail="API route not found")
+            
         file_path = os.path.join(FRONT_DIST, full_path)
         if os.path.isfile(file_path):
             return FileResponse(file_path)

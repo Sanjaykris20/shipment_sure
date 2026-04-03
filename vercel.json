@@ -1,0 +1,49 @@
+{
+  "version": 2,
+  "builds": [
+    {
+      "src": "backend/main.py",
+      "use": "@vercel/python",
+      "config": { "maxDuration": 60 }
+    },
+    {
+      "src": "front/package.json",
+      "use": "@vercel/static-build",
+      "config": { "distDir": "dist" }
+    }
+  ],
+  "rewrites": [
+    {
+      "source": "/api/(.*)",
+      "destination": "backend/main.py"
+    },
+    {
+      "source": "/auth/(.*)",
+      "destination": "backend/main.py"
+    },
+    {
+      "source": "/predict",
+      "destination": "backend/main.py"
+    },
+    {
+      "source": "/status",
+      "destination": "backend/main.py"
+    },
+    {
+      "source": "/history",
+      "destination": "backend/main.py"
+    },
+    {
+      "source": "/docs",
+      "destination": "backend/main.py"
+    },
+    {
+      "source": "/openapi.json",
+      "destination": "backend/main.py"
+    },
+    {
+      "source": "/(.*)",
+      "destination": "front/$1"
+    }
+  ]
+}
